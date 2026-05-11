@@ -12,6 +12,7 @@
 
 import json
 import os
+import re
 import time
 import csv
 import tempfile
@@ -349,6 +350,9 @@ def run_local_agent_workflow(history, messages_state, selected_model, mode_note)
 
 def build_tool_call_message(tool_call, iteration, index):
     """把 OpenAI SDK 的 tool_call 对象转换为可回注到 messages 的字典。"""
+    if isinstance(tool_call, dict):
+        return tool_call
+
     raw_tool_call_id = getattr(tool_call, "id", None)
     tool_call_id = raw_tool_call_id if isinstance(raw_tool_call_id, str) else f"tool_call_{iteration}_{index}"
     raw_tool_call_type = getattr(tool_call, "type", "function")
@@ -361,6 +365,67 @@ def build_tool_call_message(tool_call, iteration, index):
             "arguments": tool_call.function.arguments or "{}"
         }
     }
+
+
+def parse_text_tool_call(content, expected_tool_name, iteration, index):
+    """兼容部分 GGUF 模型把工具调用写成正文 JSON，而不是 OpenAI tool_calls 字段。"""
+    if not content:
+        return None
+
+    candidates = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(content):
+        if char != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(content[start:])
+            candidates.append(json.dumps(obj, ensure_ascii=False))
+        except json.JSONDecodeError:
+            continue
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(parsed, dict):
+            continue
+
+        if expected_tool_name in parsed and isinstance(parsed[expected_tool_name], dict):
+            return {
+                "id": f"text_tool_call_{iteration}_{index}",
+                "type": "function",
+                "function": {
+                    "name": expected_tool_name,
+                    "arguments": json.dumps(parsed[expected_tool_name], ensure_ascii=False),
+                }
+            }
+
+        if parsed.get("name") != expected_tool_name:
+            continue
+
+        arguments = parsed.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+
+        return {
+            "id": f"text_tool_call_{iteration}_{index}",
+            "type": "function",
+            "function": {
+                "name": expected_tool_name,
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+        }
+
+    return None
+
+
+def get_tool_call_arguments(tool_call):
+    """统一读取 SDK tool_call 或正文 JSON 兼容 tool_call 的参数。"""
+    if isinstance(tool_call, dict):
+        return tool_call.get("function", {}).get("arguments", "{}")
+    return tool_call.function.arguments or "{}"
 
 
 def call_model_for_tool(selected_model, messages, tool_name):
@@ -395,7 +460,10 @@ def run_guided_payroll_agent(history, messages_state, selected_model):
         response_msg = response.choices[0].message
         tool_calls = response_msg.tool_calls or []
         if not tool_calls:
-            raise RuntimeError(f"模型没有返回预期工具调用: {tool_name}; content={response_msg.content!r}")
+            parsed_tool_call = parse_text_tool_call(response_msg.content, tool_name, step_index, 1)
+            tool_calls = [parsed_tool_call] if parsed_tool_call else []
+        if not tool_calls:
+            raise RuntimeError(f"模型没有返回可解析的工具调用: {tool_name}; content={response_msg.content!r}")
 
         tool_call = tool_calls[0]
         assistant_message = {
@@ -406,7 +474,8 @@ def run_guided_payroll_agent(history, messages_state, selected_model):
         messages_state.append(assistant_message)
 
         try:
-            func_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+            raw_args = get_tool_call_arguments(tool_call)
+            func_args = json.loads(raw_args) if raw_args else {}
         except json.JSONDecodeError:
             func_args = {}
 
@@ -443,7 +512,7 @@ def run_guided_payroll_agent(history, messages_state, selected_model):
         tool_results["calculate_payroll_and_tax"],
         tool_results["export_payroll_csv"],
         selected_model,
-        "✅ 本次为真实模型 tool call：每一步都由模型返回 tool_calls，调度器再执行对应本地工具。",
+        "✅ 本次为真实模型 tool call / 工具调用请求：调度器根据模型返回内容执行本地工具链。",
     )
     history[-1] = {"role": "assistant", "content": final_text}
     messages_state.append({"role": "assistant", "content": final_text})

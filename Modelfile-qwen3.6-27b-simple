@@ -1,0 +1,15 @@
+FROM /Users/brofea/Downloads/Qwen3.6-27B-UD-IQ2_M.gguf
+
+TEMPLATE """{{- if .Tools }}你可以调用这些工具：
+{{ json .Tools }}
+
+如果需要调用工具，只输出 JSON：{"name":"工具名","arguments":{}}。
+{{- end }}
+{{- range .Messages }}
+{{ .Role }}: {{ .Content }}
+{{- end }}
+assistant:
+"""
+
+PARAMETER num_ctx 512
+PARAMETER num_predict 128
