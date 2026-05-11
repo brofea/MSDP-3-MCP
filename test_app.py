@@ -14,11 +14,13 @@
 import unittest
 import json
 import os
+import app
 from app import (
     get_employee_directory,
     calculate_payroll_and_tax,
     export_payroll_csv,
-    saas_generate_payroll_api
+    saas_generate_payroll_api,
+    agent_orchestrator
 )
 
 class TestTools(unittest.TestCase):
@@ -140,6 +142,41 @@ class TestIntegration(unittest.TestCase):
         export_result = export_payroll_csv(payroll_result)
         export_data = json.loads(export_result)
         self.assertEqual(export_data.get("status"), "success")
+
+class TestAgentFallback(unittest.TestCase):
+    """测试 Ollama 模型不支持 tools 时，Agent 是否能自动切换到兼容调度器。"""
+
+    def test_agent_falls_back_when_model_does_not_support_tools(self):
+        """模拟 Ollama 的 tools unsupported 错误，最终仍应生成工资表和 CSV 路径。"""
+        original_client = app.client
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                raise Exception("registry.ollama.ai/library/qwen3.6:35b-a3b does not support tools")
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeClient:
+            chat = FakeChat()
+
+        try:
+            app.client = FakeClient()
+            outputs = list(agent_orchestrator(
+                "帮我查一下全公司的工资，算好扣税，然后给我个 CSV 文件",
+                [],
+                [],
+                "qwen3.6:35b-a3b"
+            ))
+        finally:
+            app.client = original_client
+
+        final_history, final_state = outputs[-1]
+        final_content = final_history[-1]["content"]
+        self.assertIn("Ollama 提示该模型标签不支持", final_content)
+        self.assertIn("CSV 已导出", final_content)
+        self.assertIn("张三", final_content)
+        self.assertGreaterEqual(len(final_state), 5)
 
 def run_performance_tests():
     """运行轻量性能测试。

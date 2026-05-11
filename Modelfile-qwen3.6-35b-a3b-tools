@@ -1,0 +1,32 @@
+FROM /Users/brofea/Downloads/Qwen3.6-35B-A3B-UD-IQ2_M.gguf
+
+TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{- end }}
+{{- if .Tools }}<|im_start|>system
+你可以调用以下工具。需要调用工具时，只输出一个 JSON 对象：
+{"name":"工具名","arguments":{"参数名":"参数值"}}
+不要输出解释文字。
+
+可用工具：
+{{ json .Tools }}<|im_end|>
+{{- end }}
+{{- range .Messages }}
+{{- if eq .Role "tool" }}<|im_start|>tool
+{{ .Content }}<|im_end|>
+{{- else if eq .Role "assistant" }}
+<|im_start|>assistant
+{{- if .Content }}{{ .Content }}{{ end }}
+{{- if .ToolCalls }}{{ json .ToolCalls }}{{ end }}<|im_end|>
+{{- else }}
+<|im_start|>{{ .Role }}
+{{ .Content }}<|im_end|>
+{{- end }}
+{{- end }}
+<|im_start|>assistant
+"""
+
+PARAMETER num_ctx 2048
+PARAMETER num_predict 512
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"

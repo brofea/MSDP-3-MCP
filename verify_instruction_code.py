@@ -87,9 +87,9 @@ def check_business_smoke() -> None:
 
 
 def check_unit_tests() -> None:
-    """运行 test_app.py 中的 unittest 测试集。"""
+    """运行项目中所有 unittest 测试集。"""
     loader = unittest.TestLoader()
-    suite = loader.discover(str(ROOT), pattern="test_app.py")
+    suite = loader.discover(str(ROOT), pattern="test*.py")
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     if not result.wasSuccessful():
         raise AssertionError("单元测试失败")
