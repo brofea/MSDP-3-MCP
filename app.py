@@ -53,7 +53,7 @@ if OpenAI is not None:
     except Exception as e:
         print(f"❌ Ollama 客户端初始化失败: {e}")
 else:
-        print("⚠️ OpenAI 模块不可用，仅测试业务逻辑")
+    print("⚠️ OpenAI 模块不可用，仅测试业务逻辑")
 
 # ==================== 模拟数据 ====================
 # 为了让实验可离线、可复现，这里不连接真实数据库，而是使用内存中的假员工数据。
@@ -243,7 +243,12 @@ tools_schema = [
         "type": "function",
         "function": {
             "name": "get_employee_directory",
-            "description": "第一步：获取全公司所有员工的基础数据（包含姓名和职级）。不需要参数。"
+            "description": "第一步：获取全公司所有员工的基础数据（包含姓名和职级）。不需要参数。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
         }
     },
     {
@@ -440,7 +445,11 @@ def create_demo():
     左侧面板展示传统 SaaS 的固定流程，右侧面板展示 Agent 的动态工具编排。
     两个面板共享同一批底层业务函数，便于同学把“架构差异”与“业务能力”分开观察。
     """
-    import gradio as gr
+    try:
+        import gradio as gr
+    except ImportError as exc:
+        raise RuntimeError("缺少 gradio 依赖，请先运行 `python -m pip install -r requirements.txt` 后再启动 UI。") from exc
+    import inspect
 
     with gr.Blocks() as demo:
         # 页面标题只负责说明实验主题，不承载业务逻辑。
@@ -472,7 +481,10 @@ def create_demo():
 
                 # messages_state 保存发给模型的完整上下文；chatbot 只保存用户可见的对话日志。
                 messages_state = gr.State([])
-                chatbot = gr.Chatbot(label="Agent 神经推理中枢日志", height=450)
+                chatbot_kwargs = {"label": "Agent 神经推理中枢日志", "height": 450}
+                if "type" in inspect.signature(gr.Chatbot).parameters:
+                    chatbot_kwargs["type"] = "messages"
+                chatbot = gr.Chatbot(**chatbot_kwargs)
                 chat_input = gr.Textbox(
                     label="自然语言指令",
                     placeholder="输入测试用例：帮我查一下全公司的工资，算好扣税，然后给我个 CSV 文件"
@@ -488,9 +500,24 @@ def create_demo():
     return demo
 
 
-demo = create_demo()
+class MissingDependencyDemo:
+    """Gradio 未安装时的占位对象，让业务函数和单元测试仍可导入 app.py。"""
+
+    def __init__(self, reason):
+        self.reason = reason
+
+    def launch(self, *args, **kwargs):
+        raise RuntimeError(self.reason)
+
+
+try:
+    demo = create_demo()
+except RuntimeError as exc:
+    logger.warning(str(exc))
+    demo = MissingDependencyDemo(str(exc))
 
 
 if __name__ == "__main__":
     # Gradio 6 将 theme 参数迁移到了 launch 阶段，因此这里设置主题，避免运行时迁移警告。
-    demo.launch(theme="soft")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7960"))
+    demo.launch(theme="soft", server_port=server_port)
